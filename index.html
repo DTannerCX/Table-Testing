@@ -33,6 +33,21 @@
     <button onclick="loadFromUrl()">Load JSON</button>
   </div>
 
+  <!-- Repo & Folder Config -->
+  <div class="section">
+    <h2>1. Configure Repo & Load Files</h2>
+    <label>Owner:</label> <input type="text" id="owner" placeholder="your-github-username or org" /><br>
+    <label>Repo:</label> <input type="text" id="repo" placeholder="your-repo-name" /><br>
+    <label>Branch:</label> <input type="text" id="branch" value="main" /><br>
+    <label>Data Folder:</label> <input type="text" id="folder" value="data/" /><br>
+    <button onclick="listFiles()">List JSON Files in Folder</button>
+    <select id="fileSelect" style="width:80%; display:none;">
+      <option value="">-- Select a file --</option>
+    </select>
+    <button onclick="loadSelectedFile()" id="loadBtn" style="display:none;">Load Selected File</button>
+  </div>
+
+
   <!-- CSV Import -->
   <div class="section">
     <h2>2. Or Import from CSV</h2>
