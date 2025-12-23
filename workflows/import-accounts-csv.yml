@@ -1,0 +1,41 @@
+name: Import Accounts CSV → PR
+
+on:
+  push:
+    paths:
+      - 'imports/*.csv'
+  workflow_dispatch:
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pandas
+        run: pip install pandas
+
+      - name: Run import script
+        run: python scripts/import_accounts_csv.py
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: csv-import/${{ github.run_id }}
+          delete-branch: true
+          title: "Import accounts from CSV – ${{ github.actor }}"
+          body: |
+            Automated bulk import from CSV uploaded to `imports/`.
+
+            Updated/added ${{ github.run_number }} accounts.
+          commit-message: "Import accounts from CSV upload"
+          labels: csv-import,automated

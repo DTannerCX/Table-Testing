@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>GitHub JSON Editor + CSV Import</title>
+  <!-- Tabulator -->
+  <link href="https://unpkg.com/tabulator-tables@6.2.5/dist/css/tabulator.min.css" rel="stylesheet">
+  <script src="https://unpkg.com/tabulator-tables@6.2.5/dist/js/tabulator.min.js"></script>
+  <!-- PapaParse for CSV parsing -->
+  <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
+  <!-- Octokit -->
+  <script src="https://unpkg.com/@octokit/rest@20.0.2/dist-src/index.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; background: #f7f7f7; }
+    h1, h2 { color: #24292f; }
+    .section { margin: 30px 0; padding: 20px; background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+    input, button, select { padding: 10px; font-size: 16px; margin: 8px 0; }
+    button { background: #2ea44f; color: white; border: none; border-radius: 6px; cursor: pointer; }
+    button:hover { background: #2c974b; }
+    #status { margin-top: 15px; font-weight: bold; color: #d73a49; }
+    .success { color: #28a745 !important; }
+  </style>
+</head>
+<body>
+  <h1>GitHub JSON Table Editor + CSV Import</h1>
+
+  <!-- Load Existing JSON -->
+  <div class="section">
+    <h2>1. Load Existing JSON</h2>
+    <label>Raw GitHub JSON URL:</label><br>
+    <input type="text" id="jsonUrl" style="width:80%" placeholder="https://raw.githubusercontent.com/user/repo/main/data/accounts.json" />
+    <button onclick="loadFromUrl()">Load JSON</button>
+  </div>
+
+  <!-- CSV Import -->
+  <div class="section">
+    <h2>2. Or Import from CSV</h2>
+    <input type="file" id="csvFile" accept=".csv" />
+    <button onclick="importCSV()">Import & Convert to Table</button>
+    <p><small>CSV must have headers. "account_id" column is used as unique key.</small></p>
+  </div>
+
+  <!-- Save -->
+  <div class="section">
+    <h2>3. Save Changes to GitHub</h2>
+    <label>GitHub Personal Access Token (repo scope):</label><br>
+    <input type="password" id="pat" style="width:60%" />
+    <button onclick="saveChanges()">Save Changes → Create PR</button>
+  </div>
+
+  <div id="status"></div>
+  <div id="table"></div>
+
+<script>
+let table;
+let currentData = [];
+let repoInfo = {};
+let originalJsonSha = null;
+
+async function loadFromUrl() {
+  const url = document.getElementById("jsonUrl").value.trim();
+  if (!url) return setStatus("Enter a JSON URL", "error");
+
+  setStatus("Loading JSON...");
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("Fetch failed");
+    const data = await res.json();
+    if (!Array.isArray(data)) throw new Error("JSON must be an array");
+
+    parseRepoInfo(url);
+    currentData = JSON.parse(JSON.stringify(data));
+    createTable(currentData);
+    setStatus(`Loaded ${data.length} records`, "success");
+  } catch (e) {
+    setStatus("Error: " + e.message, "error");
+  }
+}
+
+function importCSV() {
+  const input = document.getElementById("csvFile");
+  if (!input.files.length) return setStatus("Select a CSV file", "error");
+
+  const file = input.files[0];
+  setStatus("Parsing CSV...");
+
+  Papa.parse(file, {
+    header: true,
+    skipEmptyLines: true,
+    complete: function(results) {
+      const data = results.data;
+
+      // Map to standard keys if needed (customize as your CSV changes)
+      const mapped = data.map(row => ({
+        account_id: row["Account Id (18)"] || row["account_id"] || "",
+        name: row["Account Name"] || row["name"] || "",
+        owner: row["Account Owner"] || row["owner"] || "",
+        billing_state: row["Billing State/Province"] || row["billing_state"] || "",
+        type: row["Type"] || row["type"] || "",
+        last_activity: row["Last Activity"] || row["last_activity"] || "",
+        last_modified: row["Last Modified Date"] || row["last_modified"] || "",
+        activated: row["Activated?"] === "1" || row["activated"] === "1",
+        date_activated: row["Date Activated"] || row["date_activated"] || "",
+        contract_expires: row["Contract Expiration Date Renewal Limit"] || row["contract_expires"] || "",
+        primary_contact_email: row["Primary Contact Email"] || row["primary_contact_email"] || "",
+        // Add more mappings here as needed
+      }));
+
+      currentData = mapped;
+      createTable(currentData);
+      setStatus(`CSV imported: ${data.length} rows → ready to save as JSON`, "success");
+
+      // Clear file input
+      input.value = "";
+    },
+    error: function(err) {
+      setStatus("CSV parse error: " + err, "error");
+    }
+  });
+}
+
+function createTable(data) {
+  if (table) table.destroy();
+
+  const columns = [];
+  if (data.length > 0) {
+    Object.keys(data[0]).forEach(key => {
+      columns.push({
+        title: key.replace(/_/g, " ").toUpperCase(),
+        field: key,
+        editor: "input",
+        headerFilter: "input"
+      });
+    });
+  }
+
+  table = new Tabulator("#table", {
+    data: data,
+    layout: "fitColumns",
+    height: "70vh",
+    pagination: "local",
+    paginationSize: 25,
+    columns: columns,
+  });
+}
+
+function parseRepoInfo(url) {
+  const match = url.match(/github\.com\/([^\/]+)\/([^\/]+)\/raw\/([^\/]+)\/(.+)/);
+  if (match) {
+    repoInfo = {
+      owner: match[1],
+      repo: match[2],
+      branch: match[3],
+      path: match[4]
+    };
+  }
+}
+
+async function saveChanges() {
+  const pat = document.getElementById("pat").value.trim();
+  if (!pat) return setStatus("Enter your PAT", "error");
+  if (!repoInfo.owner) return setStatus("Load a JSON URL first to set repo", "error");
+
+  const data = table ? table.getData() : currentData;
+  if (data.length === 0) return setStatus("No data to save", "error");
+
+  setStatus("Creating branch & PR...");
+
+  try {
+    const octokit = new Octokit.Rest({ auth: pat });
+
+    const newBranch = `csv-import-${Date.now()}`;
+
+    // Get main branch SHA
+    const { data: ref } = await octokit.git.getRef({
+      owner: repoInfo.owner, repo: repoInfo.repo, ref: `heads/${repoInfo.branch}`
+    });
+
+    // Create new branch
+    await octokit.git.createRef({
+      owner: repoInfo.owner, repo: repoInfo.repo,
+      ref: `refs/heads/${newBranch}`,
+      sha: ref.object.sha
+    });
+
+    // Get current file SHA (if exists)
+    let sha = null;
+    try {
+      const { data: file } = await octokit.repos.getContent({
+        owner: repoInfo.owner, repo: repoInfo.repo, path: repoInfo.path, ref: repoInfo.branch
+      });
+      sha = file.sha;
+    } catch (e) {} // file doesn't exist yet
+
+    // Commit pretty JSON
+    const content = btoa(unescape(encodeURIComponent(JSON.stringify(data, null, 2))));
+    await octokit.repos.createOrUpdateFileContents({
+      owner: repoInfo.owner,
+      repo: repoInfo.repo,
+      path: repoInfo.path,
+      message: `Import/update accounts from CSV – ${new Date().toISOString()}`,
+      content: content,
+      branch: newBranch,
+      sha: sha || undefined
+    });
+
+    // Create PR
+    const { data: pr } = await octokit.pulls.create({
+      owner: repoInfo.owner,
+      repo: repoInfo.repo,
+      title: "CSV Import: Update accounts.json",
+      head: newBranch,
+      base: repoInfo.branch,
+      body: "Automated import from uploaded CSV via web editor.\n\nReview and merge when ready."
+    });
+
+    setStatus(`Success! PR created: <a href="${pr.html_url}" target="_blank">${pr.html_url}</a>`, "success");
+  } catch (e) {
+    setStatus("Error: " + (e.message || e), "error");
+    console.error(e);
+  }
+}
+
+function setStatus(msg, type = "") {
+  const el = document.getElementById("status");
+  el.innerHTML = msg;
+  el.className = type === "success" ? "success" : "";
+}
+</script>
+</body>
+</html>
